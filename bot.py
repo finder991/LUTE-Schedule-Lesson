@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -13,19 +13,6 @@ DAYS_UA = {
     "Thursday": "Четвер", "Friday": "П'ятниця",
     "Saturday": "Субота", "Sunday": "Неділя",
 }
-
-
-def get_week() -> str:
-    anchor = SEMESTER_START.isocalendar()[1]
-    now = datetime.now().isocalendar()[1]
-    if (now % 2) == (anchor % 2):
-        return ANCHOR_WEEK_TYPE
-    return "Практичний тиждень"
-
-
-def current_day() -> str:
-    return datetime.now().strftime("%A")
-
 
 BELLS = {
     "bach23": {
@@ -58,8 +45,6 @@ BELLS = {
         ],
     },
 }
-
-
 
 LECTURES = {
     "Global": {
@@ -200,19 +185,35 @@ PRACTICE = {
 }
 
 
-def get_day_schedule(group: str, day: str) -> list[dict]:
-    if get_week() == "Лекційний тиждень":
+def get_day_for_date(d: datetime) -> str:
+    return ["Monday", "Tuesday", "Wednesday", "Thursday",
+            "Friday", "Saturday", "Sunday"][d.weekday()]
+
+
+def get_week_for_date(d: datetime) -> str:
+    weeks_passed = (d - SEMESTER_START).days // 7
+    return ANCHOR_WEEK_TYPE if weeks_passed % 2 == 0 else "Практичний тиждень"
+
+
+def get_week() -> str:
+    return get_week_for_date(datetime.now())
+
+
+def get_day_schedule(group: str, day: str, week_type: str | None = None) -> list[dict]:
+    if week_type is None:
+        week_type = get_week()
+    if week_type == "Лекційний тиждень":
         return LECTURES["Global"].get(day, [])
     return PRACTICE.get(group, {}).get(day, [])
 
 
-def format_schedule(group: str, day: str) -> str:
-    pairs = get_day_schedule(group, day)
-    header = f"📅 {DAYS_UA.get(day, day)} — {group}\n🗓 {get_week()}\n"
-
+def format_schedule_for_date(group: str, d: datetime) -> str:
+    day = get_day_for_date(d)
+    week_type = get_week_for_date(d)
+    pairs = get_day_schedule(group, day, week_type)
+    header = f"📅 {DAYS_UA.get(day, day)} ({d.strftime('%d.%m')}) — {group}\n🗓 {week_type}\n"
     if not pairs:
-        return header + "\nСьогодні занять немає 🎉"
-
+        return header + "\nЗанять немає 🎉"
     lines = [header]
     for p in sorted(pairs, key=lambda x: x["pair"]):
         mark = " В*" if p.get("elective") else ""
@@ -223,6 +224,30 @@ def format_schedule(group: str, day: str) -> str:
             f"   🏫 {p['room']}"
         )
     if any(p.get("elective") for p in pairs):
+        lines.append("\n\nВ* — вільний вибір здобувача")
+    return "".join(lines)
+
+
+def format_full_week(group: str) -> str:
+    week_type = get_week()
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    lines = [f"📋 Повний розклад — {group}\n🗓 {week_type}"]
+    has_elective = False
+    for day in days:
+        pairs = get_day_schedule(group, day, week_type)
+        lines.append(f"\n\n━━━ {DAYS_UA[day]} ━━━")
+        if not pairs:
+            lines.append("\nЗанять немає 🎉")
+            continue
+        for p in sorted(pairs, key=lambda x: x["pair"]):
+            mark = " В*" if p.get("elective") else ""
+            if p.get("elective"):
+                has_elective = True
+            lines.append(
+                f"\n{p['pair']}️⃣ {p['time']}{mark}  {p['subject']}"
+                f"\n   👤 {p['teacher']} · 🏫 {p['room']}"
+            )
+    if has_elective:
         lines.append("\n\nВ* — вільний вибір здобувача")
     return "".join(lines)
 
@@ -253,6 +278,15 @@ def main_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📗 Розклад КН-352", callback_data="grp:КН-352")],
         [InlineKeyboardButton("🗓 Який зараз тиждень?", callback_data="week")],
         [InlineKeyboardButton("⏰ Розклад дзвінків", callback_data="bells")],
+    ])
+
+
+def group_menu(group: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Сьогодні", callback_data=f"day:today:{group}")],
+        [InlineKeyboardButton("➡️ Завтра", callback_data=f"day:tomorrow:{group}")],
+        [InlineKeyboardButton("📋 Весь тиждень", callback_data=f"day:week:{group}")],
+        [InlineKeyboardButton("🏠 Головне меню", callback_data="menu")],
     ])
 
 
@@ -287,9 +321,21 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("grp:"):
         group = data.split(":", 1)[1]
         await query.message.reply_text(
-            format_schedule(group, current_day()),
-            reply_markup=main_menu(),
+            f"Розклад {group}. Що показати?",
+            reply_markup=group_menu(group),
         )
+
+    elif data.startswith("day:"):
+        _, kind, group = data.split(":", 2)
+        if kind == "today":
+            text = format_schedule_for_date(group, datetime.now())
+        elif kind == "tomorrow":
+            text = format_schedule_for_date(group, datetime.now() + timedelta(days=1))
+        elif kind == "week":
+            text = format_full_week(group)
+        else:
+            text = "Невідомо"
+        await query.message.reply_text(text, reply_markup=group_menu(group))
 
     elif data == "week":
         await query.message.reply_text(

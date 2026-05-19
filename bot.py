@@ -319,7 +319,26 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .read_timeout(30)
+        .write_timeout(30)
+        .connect_timeout(30)
+        .pool_timeout(30)
+        .get_updates_read_timeout(40)
+        .get_updates_write_timeout(30)
+        .get_updates_connect_timeout(30)
+        .get_updates_pool_timeout(30)
+        .build()
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_click))
-    app.run_polling()
+
+    app.run_polling(
+        timeout=30,
+        poll_interval=1.0,
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+    )
